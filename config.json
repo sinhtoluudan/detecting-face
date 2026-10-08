@@ -8,5 +8,13 @@
   "min_samples": 5,
   "region_threshold": 0.80,
   "min_region_samples": 3,
-  "min_regions": 3
+  "min_regions": 3,
+  "preview_fps": 25,
+  "max_analysis_fps": 5,
+  "detection_size": 480,
+  "cpu_threads": 2,
+  "max_result_age": 3.0,
+  "max_faces": 5,
+  "track_timeout": 3.0,
+  "name_hold_seconds": 2.5
 }
