@@ -1,0 +1,12 @@
+{
+  "camera_index": 0,
+  "similarity_threshold": 0.50,
+  "runner_up_margin": 0.08,
+  "confirm_frames": 3,
+  "min_face_size": 90,
+  "min_blur_score": 35.0,
+  "min_samples": 5,
+  "region_threshold": 0.80,
+  "min_region_samples": 3,
+  "min_regions": 3
+}
