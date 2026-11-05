@@ -1,0 +1,61 @@
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-facecam}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?Copy .env.example to .env first}
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27019}:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' | grep 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+  api:
+    build:
+      context: ..
+      dockerfile: web/backend/Dockerfile
+      args:
+        INSTALL_FACE: ${INSTALL_FACE:-true}
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER:-facecam}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: ${MONGO_DB:-facecam_attendance}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env}
+      FACE_ENABLED: ${FACE_ENABLED:-true}
+      FACE_THRESHOLD: ${FACE_THRESHOLD:-0.50}
+      FACE_MARGIN: ${FACE_MARGIN:-0.08}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      - face_models:/root/.insightface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 20
+      start_period: 20s
+  frontend:
+    build:
+      context: ..
+      dockerfile: web/frontend/Dockerfile
+      args:
+        API_PROXY_URL: http://api:8000
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+volumes:
+  mongo_data:
+  face_models:
