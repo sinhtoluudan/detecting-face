@@ -8,6 +8,8 @@ import sqlite3
 import sys
 from pathlib import Path
 import numpy as np
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1]/'.env',override=True)
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 from app import database as store
 from app.face_service import normalize, ROOT
@@ -16,11 +18,22 @@ from region_match import VERSION, validate_regions
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sqlite',required=True,type=Path)
-    parser.add_argument('--mapping',required=True,type=Path,help='CSV columns: person_id,employee_code')
+    parser.add_argument('--sqlite',type=Path,default=ROOT/'data'/'faces.db')
+    parser.add_argument('--mapping',type=Path,help='CSV columns: person_id,employee_code')
+    parser.add_argument('--list-people',action='store_true',help='List local person IDs and names without reading face vectors')
     parser.add_argument('--apply',action='store_true')
     parser.add_argument('--consent-confirmed',action='store_true',help='Confirm permission to migrate biometric templates')
     args=parser.parse_args()
+    if args.list_people:
+        if not args.sqlite.is_file():
+            raise SystemExit('Không tìm thấy SQLite nguồn')
+        with sqlite3.connect(args.sqlite.resolve().as_uri()+'?mode=ro',uri=True) as db:
+            for person_id,name,count in db.execute('''SELECT p.id,p.name,COUNT(s.id)
+                FROM people p LEFT JOIN samples s ON p.id=s.person_id GROUP BY p.id ORDER BY p.name'''):
+                print(f'{person_id}\t{name}\t{count} mẫu')
+        return
+    if not args.mapping:
+        parser.error('Cần --mapping để chuyển mẫu; dùng --list-people để xem người trong SQLite trước')
     if args.apply and not args.consent_confirmed:
         raise SystemExit('Cần --consent-confirmed khi --apply. Chỉ chuyển mẫu của người đã đồng ý.')
     if not args.sqlite.is_file():

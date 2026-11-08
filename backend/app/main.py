@@ -13,6 +13,7 @@ from .routes_face import router as face_router
 
 @asynccontextmanager
 async def lifespan(app):
+    config.face_settings()
     store.db.command('ping')
     store.indexes()
     seed()

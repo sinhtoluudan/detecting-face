@@ -45,11 +45,8 @@ def roles(*allowed):
     return dependency
 
 def visible_ids(user):
-    if user['role'] in ['admin', 'hr']:
+    if user['role'] in ['admin', 'hr', 'manager']:
         return None
-    if user['role'] == 'manager':
-        departments = [x['_id'] for x in store.db.departments.find({'manager_id': user['_id']})]
-        return list({user['_id'], *[x['_id'] for x in store.db.users.find({'department_id': {'$in': departments}})]})
     return [user['_id']]
 
 def require_visible(user, target):

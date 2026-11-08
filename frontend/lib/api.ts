@@ -15,7 +15,7 @@ export async function api(path: string, options: RequestInit = {}) {
 export const write = (path:string, data:unknown, method='POST') => api(path,{method,body:JSON.stringify(data)});
 export type Row = Record<string, any>;
 export const roles:Record<string,string> = {admin:'Quản trị viên',hr:'Nhân sự',manager:'Quản lý',employee:'Nhân viên'};
-export const statusLabels:Record<string,string> = {present:'Đủ công',late:'Đi trễ',early:'Về sớm',absent:'Vắng mặt',leave:'Nghỉ phép',scheduled:'Chưa đến ca',working:'Đang làm',missing_out:'Thiếu lượt ra',pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Từ chối',cancelled:'Đã hủy'};
+export const statusLabels:Record<string,string> = {present:'Đủ công',late:'Đi trễ',early:'Về sớm',absent:'Chưa chấm công',leave:'Nghỉ phép',scheduled:'Chưa đến ca',working:'Đang làm',missing_out:'Thiếu lượt ra',pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Từ chối',cancelled:'Đã hủy'};
 export const requestLabels:Record<string,string> = {leave:'Nghỉ phép',correction:'Bổ sung / sửa công',overtime:'Tăng ca',remote:'Làm từ xa',business:'Công tác',late_early:'Đi trễ / về sớm'};
 export const vnDate=(v:string)=>v ? new Date(v.length===10?v+'T12:00:00+07:00':v).toLocaleDateString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}):'—';
 export const vnTime=(v:string)=>v ? new Date(v).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Ho_Chi_Minh'}):'—';

@@ -1,8 +1,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY web/frontend/package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci
-COPY web/frontend ./
+COPY frontend ./
 ARG API_PROXY_URL=http://api:8000
 ENV API_PROXY_URL=$API_PROXY_URL NEXT_TELEMETRY_DISABLED=1
 RUN npm run build

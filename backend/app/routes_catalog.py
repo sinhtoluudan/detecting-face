@@ -1,12 +1,12 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from . import database as store
-from .schemas import UserInput, DepartmentInput, ShiftInput, AssignmentInput, HolidayInput
+from .schemas import UserInput, DepartmentInput, ShiftInput, AssignmentInput, AssignmentShiftInput, HolidayInput
 from .security import current_user, roles, visible_ids, require_visible, password_hash, audit
 from .services import get, check_open, dates, bounds, serialized, enriched_assignments
 
 router = APIRouter(tags=['Nhân sự và lịch làm'])
-hr = roles('admin','hr')
+hr = roles('admin','hr','manager')
 management = roles('admin','hr','manager')
 
 @router.get('/users')
@@ -16,8 +16,6 @@ def users(user=Depends(current_user)):
     return [store.public(x) for x in store.db.users.find(query, {'password_hash':0}).sort('code',1)]
 
 def validate_user(data, actor, existing=None):
-    if actor['role']!='admin' and (data.role in ['admin','hr'] or (existing and existing['role'] in ['admin','hr'])):
-        raise HTTPException(403, 'Chỉ Admin quản lý tài khoản Admin/HR')
     if existing and existing['_id']==actor['_id'] and (not data.active or data.role!=actor['role']):
         raise HTTPException(409, 'Không thể tự khóa hoặc tự đổi quyền tài khoản đang sử dụng')
     if existing and existing['role']=='manager' and (data.role!='manager' or not data.active):
@@ -56,7 +54,11 @@ def update_user(id: str, data: UserInput, user=Depends(hr)):
 
 @router.get('/departments')
 def departments(user=Depends(current_user)):
-    return [store.public(x) for x in store.db.departments.find().sort('name',1)]
+    people = {x['_id']: x['name'] for x in store.db.users.find({}, {'name': 1})}
+    return [{**store.public(x),
+             'manager_name': people.get(x.get('manager_id'), ''),
+             'employee_count': store.db.users.count_documents({'department_id': x['_id'], 'active': True})}
+            for x in store.db.departments.find().sort('name',1)]
 
 def department_values(data):
     if data.manager_id:
@@ -163,6 +165,39 @@ def delete_assignment(id: str,user=Depends(management)):
     store.db.assignments.delete_one({'_id':id})
     audit(user,'assignment.delete',id,before=store.public(doc))
     return {'message':'Đã hủy ca'}
+
+@router.put('/assignments/{id}')
+@serialized
+def update_assignment(id: str,data: AssignmentShiftInput,user=Depends(management)):
+    doc=get('assignments',id)
+    require_visible(user,doc['user_id'])
+    check_open(doc['date'])
+    shift=get('shifts',data.shift_id)
+    if not shift['active']:
+        raise HTTPException(409,'Ca làm đã ngưng sử dụng')
+    if data.shift_id==doc['shift_id']:
+        return store.public(doc)
+    if store.db.attendance.count_documents({'assignment_id':id}):
+        raise HTTPException(409,'Ca đã có chấm công, không thể đổi lịch')
+    if store.db.requests.count_documents({'user_id':doc['user_id'],'start_date':{'$lte':doc['date']},
+        'end_date':{'$gte':doc['date']},'status':{'$in':['pending','approved']}}):
+        raise HTTPException(409,'Ca đang có đơn liên quan. Hủy hoặc xử lý đơn trước khi đổi ca')
+    employee=get('users',doc['user_id'])
+    if doc['date']<employee['joined_date']:
+        raise HTTPException(409,'Không thể phân ca trước ngày vào làm')
+    start,end,_=bounds(doc['date'],shift)
+    neighbors=store.db.assignments.find({'user_id':doc['user_id'],'_id':{'$ne':id},
+        'date':{'$gte':(date.fromisoformat(doc['date'])-timedelta(days=1)).isoformat(),
+                '$lte':(date.fromisoformat(doc['date'])+timedelta(days=1)).isoformat()}})
+    for other in neighbors:
+        other_start,other_end,_=bounds(other['date'],other['shift'])
+        if start<other_end and end>other_start:
+            raise HTTPException(409,'Ca làm bị trùng giờ với ca ngày liền kề')
+    before=store.public(doc)
+    store.db.assignments.update_one({'_id':id},{'$set':{'shift_id':shift['_id'],'shift':store.public(shift)}})
+    updated=store.public(get('assignments',id))
+    audit(user,'assignment.update',id,before=before,after=updated)
+    return updated
 
 @router.get('/holidays')
 def holidays(user=Depends(current_user)):

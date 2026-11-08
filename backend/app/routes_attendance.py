@@ -7,15 +7,16 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from . import database as store, config
 from .schemas import PunchInput, RequestInput, DecisionInput, ReasonInput
 from .security import current_user, roles, require_visible, audit, visible_ids
-from .services import get, check_open, serialized, punch, scoped_query, report, dates, month_range
-from .calculations import bounds, parse_dt
+from .services import get, check_open, serialized, scoped_query, report, dates, month_range
+from .calculations import bounds, calculate, parse_dt
 
 router=APIRouter(tags=['Chấm công và đơn từ'])
 management=roles('admin','hr','manager')
-hr=roles('admin','hr')
+hr=roles('admin','hr','manager')
 
 @router.get('/attendance/today')
 def today(user=Depends(current_user)):
+    settings=config.face_settings()
     local=store.now().astimezone(config.TZ).date()
     candidates=list(store.db.assignments.find({'user_id':user['_id'],'date':{
         '$gte':(local-timedelta(days=1)).isoformat(),'$lte':(local+timedelta(days=1)).isoformat()}}).sort('date',1))
@@ -24,14 +25,19 @@ def today(user=Depends(current_user)):
         start,end,_=bounds(assignment['date'],assignment['shift'])
         if assignment['date']==local.isoformat() or start-timedelta(hours=2)<=store.now()<=end+timedelta(hours=8):
             attendance=store.db.attendance.find_one({'assignment_id':assignment['_id']})
-            result.append({**store.public(assignment),'attendance':store.public(attendance)})
+            approved=list(store.db.requests.find({'user_id':user['_id'],'status':'approved',
+                'start_date':{'$lte':assignment['date']},'end_date':{'$gte':assignment['date']}}))
+            status=calculate(assignment,attendance,approved,store.now())
+            result.append({**store.public(assignment),'attendance':store.public(attendance),
+                'status':status['status'],'late_minutes':status['late_minutes']})
     profile=store.db.face_profiles.find_one({'_id':user['_id']})
     return {'date':local.isoformat(),'server_time':store.now(),'assignments':result,
-            'face_enabled':config.FACE_ENABLED,'face_samples':len((profile or {}).get('vectors',[]))}
+            'face_enabled':config.FACE_ENABLED,'face_samples':len((profile or {}).get('vectors',[])),
+            'face_min_samples':settings['min_samples'],'face_confirm_frames':settings['confirm_frames']}
 
 @router.post('/attendance/punch')
 def manual_punch(data: PunchInput,user=Depends(current_user)):
-    return punch(user,data.assignment_id,data.action)
+    raise HTTPException(403,'Chấm công vào và ra bắt buộc xác thực khuôn mặt qua camera')
 
 @router.get('/requests')
 def requests(month: str,user=Depends(current_user)):
@@ -74,6 +80,8 @@ def create_request(data: RequestInput,user=Depends(current_user)):
 @router.post('/requests/{id}/cancel')
 @serialized
 def cancel_request(id: str,user=Depends(current_user)):
+    if user['role']=='employee':
+        raise HTTPException(403,'Nhân viên chỉ được tạo và theo dõi đơn')
     doc=get('requests',id)
     if doc['user_id']!=user['_id']:
         raise HTTPException(403,'Chỉ người gửi được hủy đơn')
@@ -92,9 +100,6 @@ def decide(id: str,data: DecisionInput,user=Depends(management)):
     require_visible(user,doc['user_id'])
     if doc['user_id']==user['_id']:
         raise HTTPException(403,'Không được tự duyệt đơn của chính mình')
-    target=get('users',doc['user_id'])
-    if user['role']=='manager' and target['role'] in ['admin','hr','manager']:
-        raise HTTPException(403,'Đơn của quản lý cần HR hoặc Admin duyệt')
     if doc['status']!='pending':
         raise HTTPException(409,'Đơn này đã được xử lý')
     for day in dates(doc['start_date'],doc['end_date']):

@@ -72,6 +72,9 @@ class AssignmentInput(Input):
             raise ValueError('Thứ trong tuần phải từ 0 đến 6')
         return self
 
+class AssignmentShiftInput(Input):
+    shift_id: str
+
 class HolidayInput(Input):
     date: date
     name: str = Field(min_length=2, max_length=100)

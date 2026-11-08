@@ -40,22 +40,47 @@ def test_login_cookie_and_csrf(client,login):
     assert 'password_hash' not in client.get('/api/auth/me').text
 
 
-def test_employee_scope_and_admin_guards(client,login):
+def test_employee_read_scope_and_write_guards(client,login):
     login('employee')
     assert len(client.get('/api/users').json())==1
     assert client.get('/api/audit').status_code==403
+    departments=client.get('/api/departments')
+    assert departments.status_code==200 and departments.json()
+    assert departments.json()[0]['employee_count']>0
+    assert client.get('/api/shifts').status_code==200
+    assert client.get('/api/holidays').status_code==200
     assert client.post('/api/departments',json={'name':'Illegal'}).status_code==403
+    assert client.put('/api/departments/dept-tech',json={'name':'Illegal'}).status_code==403
+    assert client.delete('/api/departments/dept-sales').status_code==403
+    assert client.put('/api/shifts/shift-office',json=shift_payload()).status_code==403
     rows=client.get('/api/reports',params={'month':today()[:7]}).json()['rows']
     assert all(x['user_id']=='user-employee' for x in rows)
+    schedule=client.get('/api/assignments',params={'month':today()[:7]}).json()
+    assert schedule and all(x['user_id']=='user-employee' for x in schedule)
+    assert client.delete('/api/assignments/'+schedule[0]['id']).status_code==403
+    requests=client.get('/api/requests',params={'month':today()[:7]}).json()
+    assert all(x['user_id']=='user-employee' for x in requests)
+    dashboard=client.get('/api/dashboard',params={'month':today()[:7]}).json()
+    assert dashboard['active_employees']==1
+    assert all(x['user_id']=='user-employee' for x in dashboard['rows'])
+    assert client.post('/api/shifts',json=shift_payload()).status_code==403
+    assert client.post('/api/assignments',json={'user_ids':['user-tuan'],'shift_id':'shift-office','start_date':today(),'end_date':today(),'weekdays':list(range(7))}).status_code==403
     other=own_assignment('hr')
     assert client.post('/api/attendance/punch',json={'assignment_id':other['_id'],'action':'in'}).status_code==403
 
 
-def test_manager_scope(client,login):
+def test_manager_has_full_management_scope(client,login):
     login('manager')
     ids=[x['id'] for x in client.get('/api/users').json()]
-    assert 'user-employee' in ids and 'user-tuan' not in ids
-    assert client.post('/api/assignments',json={'user_ids':['user-tuan'],'shift_id':'shift-office','start_date':today(),'end_date':today(),'weekdays':list(range(7))}).status_code==403
+    assert 'user-employee' in ids and 'user-tuan' in ids
+    account=client.post('/api/users',json={'code':'NV101','name':'New administrator','username':'new-admin',
+        'password':'NewPassword@123','role':'admin','joined_date':today()})
+    assert account.status_code==201,account.text
+    day=(store.now().astimezone(config.TZ).date()+timedelta(days=20)).isoformat()
+    response=client.post('/api/assignments',json={'user_ids':['user-tuan'],'shift_id':'shift-office','start_date':day,'end_date':day,'weekdays':list(range(7))})
+    assert response.status_code==201,response.text
+    assert client.post('/api/departments',json={'name':'Manager department'}).status_code==201
+    assert client.get('/api/audit').status_code==200
 
 
 def test_create_edit_lock_user(client,login):
@@ -71,10 +96,10 @@ def test_create_edit_lock_user(client,login):
     assert client.post('/api/auth/login',json={'username':'tester','password':'NewPassword@123'}).status_code==401
 
 
-def test_hr_cannot_escalate(client,login):
+def test_hr_and_manager_can_manage_all_account_roles(client,login):
     login('hr')
     b={'code':'NV100','name':'Admin clone','username':'clone','password':'NewPassword@123','role':'admin','joined_date':today()}
-    assert client.post('/api/users',json=b).status_code==403
+    assert client.post('/api/users',json=b).status_code==201
 
 
 def test_shift_validation_and_snapshot(client,login):
@@ -102,19 +127,12 @@ def test_assign_and_delete(client,login):
     assert client.delete('/api/assignments/'+a['_id']).status_code==200
 
 
-def test_punch_duplicate_checkout(client,login,monkeypatch):
+def test_manual_punch_cannot_bypass_face_verification(client,login,monkeypatch):
     login('employee');a=own_assignment();start,end=at_work(monkeypatch,a)
-    payload={'assignment_id':a['_id'],'action':'out'}
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
-    payload['action']='in';post(client,'/attendance/punch',payload)
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
-    monkeypatch.setattr(store,'now',lambda:end)
-    # Test login sessions may expire during overnight tests; this is a daytime shift.
-    payload['action']='out';post(client,'/attendance/punch',payload)
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
-    r=client.get('/api/reports',params={'month':today()[:7]}).json()
-    row=next(r for r in r['rows'] if r['date']==today())
-    assert row['worked_minutes']==470 and row['late_minutes']==10
+    for action in ('in','out'):
+        response=client.post('/api/attendance/punch',json={'assignment_id':a['_id'],'action':action})
+        assert response.status_code==403
+    assert store.db.attendance.find_one({'assignment_id':a['_id']}) is None
 
 
 def test_request_review_no_self(client,login):
@@ -127,6 +145,14 @@ def test_request_review_no_self(client,login):
     assert next(x for x in report['rows'] if x['date']==today())['paid_leave_minutes']==480
 
 
+def test_employee_cannot_review_another_employee_request(client,login):
+    login('tuan')
+    request=post(client,'/requests',request_payload())
+    login('employee')
+    assert client.post('/api/requests/'+request['id']+'/decision',
+        json={'status':'approved','note':'Test approval'}).status_code==403
+
+
 def test_own_manager_request_requires_other_reviewer(client,login):
     login('manager');r=post(client,'/requests',request_payload())
     assert client.post('/api/requests/'+r['id']+'/decision',json={'status':'approved','note':'Đồng ý'}).status_code==403
@@ -134,8 +160,11 @@ def test_own_manager_request_requires_other_reviewer(client,login):
 
 def test_cancel_pending(client,login):
     login('employee');r=post(client,'/requests',request_payload())
-    post(client,'/requests/'+r['id']+'/cancel',{})
-    assert client.post('/api/requests/'+r['id']+'/cancel').status_code==409
+    assert client.post('/api/requests/'+r['id']+'/cancel').status_code==403
+    assert store.db.requests.find_one({'_id':r['id']})['status']=='pending'
+    login('manager');own=post(client,'/requests',request_payload())
+    post(client,'/requests/'+own['id']+'/cancel',{})
+    assert client.post('/api/requests/'+own['id']+'/cancel').status_code==409
 
 
 def test_correction_with_audit(client,login):
@@ -197,6 +226,31 @@ def test_calculation_night_break_overlap_and_approved_ot():
     assert calculate(a,p,[],end)['worked_minutes']==180
 
 
+def test_five_minute_lateness_and_absence_status():
+    a={'date':'2026-10-01','shift':{'start':'12:00','end':'20:00','grace_minutes':5}}
+    start,end,_=bounds(a['date'],a['shift'])
+    late=calculate(a,{'check_in':start+timedelta(minutes=5),'check_out':end},[],end)
+    assert late['late_minutes']==5 and late['status']=='late'
+    absent=calculate(a,None,[],end)
+    assert absent['status']=='absent'
+    scheduled=calculate(a,None,[],end-timedelta(seconds=1))
+    assert scheduled['status']=='scheduled'
+
+
+def test_edit_assignment_shift_and_reject_attended_shift(client,login):
+    login()
+    a=own_assignment()
+    store.db.attendance.insert_one({'_id':'test-attendance','assignment_id':a['_id']})
+    assert client.put('/api/assignments/'+a['_id'],json={'shift_id':'shift-night'}).status_code==409
+    day=(store.now().astimezone(config.TZ).date()+timedelta(days=20)).isoformat()
+    post(client,'/assignments',{'user_ids':['user-employee'],'shift_id':'shift-office','start_date':day,
+        'end_date':day,'weekdays':list(range(7))})
+    scheduled=own_assignment(day=day)
+    result=client.put('/api/assignments/'+scheduled['_id'],json={'shift_id':'shift-night'})
+    assert result.status_code==200,result.text
+    assert result.json()['shift']['name']=='Ca đêm'
+
+
 def test_fractional_leave_does_not_double_count_work():
     a={'date':'2026-10-01','shift':{'start':'08:00','end':'17:00','break_start':'12:00','break_end':'13:00','grace_minutes':5}}
     start,end,_=bounds(a['date'],a['shift'])
@@ -243,7 +297,7 @@ def test_login_rate_limit(client):
     assert client.post('/api/auth/login',json={'username':'missing','password':'bad'}).status_code==429
 
 
-def test_request_outside_manager_department_denied(client,login):
+def test_manager_can_review_requests_outside_own_department(client,login):
     login('tuan');r=post(client,'/requests',request_payload())
     login('manager')
-    assert client.post('/api/requests/'+r['id']+'/decision',json={'status':'approved','note':'Không được duyệt'}).status_code==403
+    assert client.post('/api/requests/'+r['id']+'/decision',json={'status':'approved','note':'Đã kiểm tra đơn'}).status_code==200

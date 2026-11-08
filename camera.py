@@ -41,7 +41,7 @@ class CaptureLoop(threading.Thread):
                     cap.release()
                     cap = cv2.VideoCapture(self.index)
             if not cap.isOpened():
-                raise RuntimeError("Không mở được camera. Đóng Zoom/Teams/Camera, cấp quyền camera hoặc thử chỉ số 1.")
+                raise RuntimeError("Không mở được camera. Đóng Camera/Teams/Zoom và các tab trình duyệt đang dùng camera; kiểm tra quyền camera của Windows rồi thử lại. install_windows.bat không sử dụng webcam.")
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             cap.set(cv2.CAP_PROP_FPS, 30)
