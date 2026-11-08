@@ -50,7 +50,8 @@ class PipelineTests(unittest.TestCase):
                 raise RuntimeError("test timeout")
             return SlowEngine()
 
-        worker = CameraWorker(0,CONFIG,load,lambda _:camera)
+        slow_config = {**CONFIG,"max_analysis_fps":1}
+        worker = CameraWorker(0,slow_config,load,lambda _:camera)
         worker.start()
         try:
             self.assertTrue(loading.wait(2))

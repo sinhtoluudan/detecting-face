@@ -33,6 +33,7 @@ class App:
         self.camera_fps = self.analysis_fps = 0.0
         self.camera_index = tk.StringVar(value=str(self.config['camera_index']))
         self.threshold = tk.StringVar(value=str(self.config['similarity_threshold']))
+        self.margin = tk.StringVar(value=str(self.config['runner_up_margin']))
         self.use_regions = tk.BooleanVar(value=True)
         self.visible_regions = {key:tk.BooleanVar(value=True) for key in LABELS}
         self.status = tk.StringVar(value='Bật camera, đăng ký mẫu cho từng người, rồi bắt đầu nhận diện.')
@@ -69,6 +70,9 @@ class App:
         self.rec_button.pack(side='left',padx=4)
         ttk.Label(bar,text='Ngưỡng:').pack(side='left',padx=(12,4))
         ttk.Entry(bar,textvariable=self.threshold,width=6).pack(side='left')
+        ttk.Label(bar,text='Biên:').pack(side='left',padx=(8,4))
+        ttk.Entry(bar,textvariable=self.margin,width=5).pack(side='left')
+        ttk.Button(bar,text='Dùng cho web',command=self.save_web_settings).pack(side='left',padx=5)
         body = ttk.Frame(outer)
         body.grid(row=2,column=0,sticky='nsew')
         body.columnconfigure(0,weight=1)
@@ -113,6 +117,30 @@ class App:
 
     def reset_names(self):
         self.tracker.clear()
+
+    def save_web_settings(self):
+        try:
+            threshold=float(self.threshold.get())
+            margin=float(self.margin.get())
+            if not 0<threshold<=1 or not 0<=margin<=1:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror('Cấu hình','Ngưỡng cần từ 0 đến 1; biên cần từ 0 đến 1.')
+            return
+        updated={**self.config,'similarity_threshold':threshold,'runner_up_margin':margin}
+        path=ROOT/'config.json'
+        temporary=path.with_suffix('.json.tmp')
+        try:
+            temporary.write_text(json.dumps(updated,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+            temporary.replace(path)
+        except OSError as exc:
+            messagebox.showerror('Không lưu được cấu hình web',str(exc))
+            return
+        self.config.update(updated)
+        if self.recognizing:
+            self.active_threshold,self.active_margin=threshold,margin
+        self.status.set(f'Đã lưu ngưỡng {threshold:.2f} và biên {margin:.2f} cho web.')
+        messagebox.showinfo('Cấu hình web','Đã lưu. API sẽ dùng cấu hình mới cho lượt nhận diện tiếp theo.')
 
     def enabled_regions(self):
         return [key for key,value in self.visible_regions.items() if value.get()]
@@ -213,10 +241,11 @@ class App:
                 return
             try:
                 self.active_threshold = float(self.threshold.get())
-                if not 0<self.active_threshold<1:
+                self.active_margin = float(self.margin.get())
+                if not 0<self.active_threshold<=1 or not 0<=self.active_margin<=1:
                     raise ValueError()
             except ValueError:
-                messagebox.showerror('Ngưỡng','Nhập số từ 0 đến 1, ví dụ 0.50.')
+                messagebox.showerror('Cấu hình','Ngưỡng và biên phải nằm trong khoảng 0 đến 1.')
                 return
             if not any(len(p['vectors'])>=self.config['min_samples'] for p in self.gallery.values()):
                 messagebox.showinfo('Chưa đủ mẫu','Cần ít nhất một người có 5 mẫu. Lưu thêm mẫu rồi thử lại.')
@@ -237,7 +266,7 @@ class App:
             pid = None
             if self.recognizing and face['good']:
                 pid,_,_ = match(face['embedding'],self.gallery,self.active_threshold,
-                              self.config['runner_up_margin'],self.config['min_samples'])
+                              self.active_margin,self.config['min_samples'])
                 if self.use_regions.get():
                     pid,_,_,_ = support_identity(pid,face['regions']['vectors'],self.gallery,self.enabled_regions(),
                         threshold=self.config.get('region_threshold',0.8),min_regions=self.config.get('min_regions',3),

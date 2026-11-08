@@ -50,7 +50,7 @@ def calculate(assignment, attendance, approved, now):
     leave = min(max(0, planned-worked), sum(r.get('leave_hours',8)*60 for r in leaves))
     grace = assignment['shift'].get('grace_minutes', 5)
     late = max(0, int((a-start).total_seconds()/60)) if a else 0
-    late = late if late > grace else 0
+    late = late if late >= grace and late > 0 else 0
     early = max(0, int((end-b).total_seconds()/60)) if b else 0
     overtime = 0
     if a and b:

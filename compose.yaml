@@ -16,8 +16,8 @@ services:
       retries: 15
   api:
     build:
-      context: ..
-      dockerfile: web/backend/Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
       args:
         INSTALL_FACE: ${INSTALL_FACE:-true}
     restart: unless-stopped
@@ -32,12 +32,12 @@ services:
       SEED_DEMO: ${SEED_DEMO:-true}
       DEMO_PASSWORD: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env}
       FACE_ENABLED: ${FACE_ENABLED:-true}
-      FACE_THRESHOLD: ${FACE_THRESHOLD:-0.50}
-      FACE_MARGIN: ${FACE_MARGIN:-0.08}
+      FACECAM_CONFIG_PATH: /repo/config.json
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
       - face_models:/root/.insightface
+      - ./config.json:/repo/config.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
       interval: 10s
@@ -46,8 +46,8 @@ services:
       start_period: 20s
   frontend:
     build:
-      context: ..
-      dockerfile: web/frontend/Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         API_PROXY_URL: http://api:8000
     restart: unless-stopped

@@ -7,14 +7,16 @@ from .services import get, serialized, punch
 from .face_service import extract, normalize, match, gallery
 
 router=APIRouter(prefix='/faces',tags=['Khuôn mặt — kế thừa nhánh khang'])
-hr=roles('admin','hr')
+hr=roles('admin','hr','manager')
 
 @router.get('/profiles')
 def profiles(user=Depends(current_user)):
+    settings=config.face_settings()
     ids=visible_ids(user)
     query={} if ids is None else {'_id':{'$in':ids}}
     profiles={x['_id']:x for x in store.db.face_profiles.find(query)}
-    return {'enabled':config.FACE_ENABLED,'threshold':config.FACE_THRESHOLD,'minimum_samples':5,
+    return {'enabled':config.FACE_ENABLED,'threshold':settings['threshold'],'margin':settings['margin'],
+        'minimum_samples':settings['min_samples'],'confirm_frames':settings['confirm_frames'],
         'items':[{'user_id':x['_id'],'name':x['name'],'code':x['code'],
           'samples':len(profiles.get(x['_id'],{}).get('vectors',[])),
           'updated_at':profiles.get(x['_id'],{}).get('updated_at')}
@@ -54,6 +56,7 @@ def delete_face(user_id: str,data: ReasonInput,user=Depends(hr)):
 @router.post('/punch')
 @serialized
 def face_punch(data: FacePunch,user=Depends(current_user)):
+    settings=config.face_settings()
     throttle('face:'+user['_id'],60,60)
     assignment=get('assignments',data.assignment_id)
     if assignment['user_id']!=user['_id']:
@@ -63,11 +66,12 @@ def face_punch(data: FacePunch,user=Depends(current_user)):
     if state and state.get('completed'):
         raise HTTPException(409,'Lượt xác nhận đã dùng. Bắt đầu lượt mới')
     try:
-        vector,_,frame_hash=extract(data.image)
+        vector,_,frame_hash=extract(data.image,settings)
     except HTTPException:
         store.db.face_attempts.delete_one({'_id':key,'completed':{'$ne':True}})
         raise
-    candidate,score,gap=match(vector,gallery(),threshold=config.FACE_THRESHOLD,margin=config.FACE_MARGIN,min_samples=5)
+    candidate,score,gap=match(vector,gallery(),threshold=settings['threshold'],margin=settings['margin'],
+                              min_samples=settings['min_samples'])
     if candidate!=user['_id']:
         store.db.face_attempts.delete_one({'_id':key,'completed':{'$ne':True}})
         raise HTTPException(422,'Khuôn mặt chưa khớp tài khoản đang đăng nhập. Thử lại với mặt rõ hoặc liên hệ HR')
@@ -78,11 +82,13 @@ def face_punch(data: FacePunch,user=Depends(current_user)):
         raise HTTPException(409,'Cần ảnh mới từ camera để xác nhận tiếp')
     state['count']+=1; state['hashes'].append(frame_hash)
     state['expires_at']=store.now()+timedelta(seconds=15)
-    completed=state['count']>=3
+    completed=state['count']>=settings['confirm_frames']
     if completed:
         result=punch(user,data.assignment_id,data.action,source='face')
         state['completed']=True
         store.db.face_attempts.replace_one({'_id':key},state,upsert=True)
-        return {'confirmed':True,'count':3,'attendance':result,'message':'Đã xác nhận khuôn mặt và ghi nhận công'}
+        return {'confirmed':True,'count':settings['confirm_frames'],'required':settings['confirm_frames'],
+                'attendance':result,'message':'Đã xác nhận khuôn mặt và ghi nhận công'}
     store.db.face_attempts.replace_one({'_id':key},state,upsert=True)
-    return {'confirmed':False,'count':state['count'],'message':f'Đang xác nhận {state["count"]}/3'}
+    return {'confirmed':False,'count':state['count'],'required':settings['confirm_frames'],
+            'message':f'Đang xác nhận {state["count"]}/{settings["confirm_frames"]}'}

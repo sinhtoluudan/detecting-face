@@ -1,4 +1,8 @@
 .venv/
+.venv-import/
+node_modules/
+.next/
+*.tsbuildinfo
 __pycache__/
 data/
 *.pyc

@@ -7,11 +7,11 @@ if errorlevel 1 goto fail
 if errorlevel 1 goto fail
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 goto fail
-echo Installation complete. Open run_windows.bat to start.
-pause
+echo Installation complete. Open run_camera_test_windows.bat to start the separate desktop camera test.
+echo This installer does not start the camera or leave a Python process running.
 exit /b 0
 :fail
 echo Installation failed. Install Python 3.11 64-bit with Python Launcher.
-echo Check the error above and your internet connection. See README.md.
+echo Check the error above and your internet connection.
 pause
 exit /b 1

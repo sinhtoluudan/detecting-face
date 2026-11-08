@@ -5,6 +5,7 @@ The API extracts embeddings itself and binds the result to the logged-in account
 """
 import base64
 import hashlib
+import logging
 import sys
 from pathlib import Path
 from threading import Lock
@@ -12,17 +13,21 @@ from datetime import timedelta
 from fastapi import HTTPException
 from . import config, database as store
 
-ROOT=Path(__file__).resolve().parents[3]
+ROOT=Path(__file__).resolve().parents[2]
+if not (ROOT/'core.py').is_file() and (ROOT.parent/'core.py').is_file():
+    ROOT=ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0,str(ROOT))
 from core import normalize, match  # Original branch algorithm, not a replacement.
 
 _engine=None
+_engine_settings=None
 _engine_lock=Lock()
 
 
-def extract(image):
-    global _engine
+def extract(image,settings=None):
+    global _engine,_engine_settings
+    settings=settings or config.face_settings()
     if not config.FACE_ENABLED:
         raise HTTPException(503,'Chưa bật nhận diện. Cài requirements-face.txt và đặt FACE_ENABLED=true')
     try:
@@ -47,12 +52,21 @@ def extract(image):
     except Exception:
         raise HTTPException(422,'Ảnh không hợp lệ. Dùng ảnh camera tối đa 1920×1080 và 1.2 MB')
     with _engine_lock:
-        if _engine is None:
+        engine_settings=(settings['cpu_threads'],settings['detection_size'])
+        if _engine is None or _engine_settings!=engine_settings:
+            _engine=None
+            _engine_settings=None
             try:
-                _engine=create_engine({'cpu_threads':2,'detection_size':480})
-            except Exception:
-                raise HTTPException(503,'Không nạp được buffalo_l. Kiểm tra model, thư viện và kết nối tải model trên máy chủ')
-        faces=_engine.get(frame,max_num=2)
+                _engine=create_engine(settings)
+                _engine_settings=engine_settings
+            except Exception as exc:
+                logging.exception('Could not initialize the face recognition model')
+                raise HTTPException(503,'Không nạp được buffalo_l. Kiểm tra model, thư viện và kết nối tải model trên máy chủ') from exc
+        try:
+            faces=_engine.get(frame,max_num=2)
+        except Exception as exc:
+            logging.exception('Face recognition failed while processing a frame')
+            raise HTTPException(503,'Không xử lý được ảnh khuôn mặt. Hãy thử lại hoặc liên hệ quản trị viên') from exc
     if len(faces)!=1:
         raise HTTPException(422,'Cần đúng một khuôn mặt trong khung hình')
     face=faces[0]
@@ -61,7 +75,7 @@ def extract(image):
     x1,y1,x2,y2=max(0,x1),max(0,y1),min(w,x2),min(h,y2)
     crop=frame[y1:y2,x1:x2]
     blur=float(cv2.Laplacian(cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY),cv2.CV_64F).var()) if crop.size else 0
-    if min(x2-x1,y2-y1)<90 or blur<35 or float(face.det_score)<0.65:
+    if min(x2-x1,y2-y1)<settings['min_face_size'] or blur<settings['min_blur_score'] or float(face.det_score)<0.65:
         raise HTTPException(422,'Mặt quá nhỏ hoặc mờ. Tiến gần camera và giữ mặt rõ')
     region_data=extract_regions(frame,face.kps)['vectors']
     return normalize(face.normed_embedding),region_data,hashlib.sha256(raw).hexdigest()

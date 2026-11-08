@@ -2,9 +2,10 @@
 import { useEffect,useRef,useState } from 'react';
 import { Camera, CheckCircle2, VideoOff } from 'lucide-react';
 import { write } from '@/lib/api';
-export default function FaceCamera({userId,assignmentId,action,onDone}:{userId?:string,assignmentId?:string,action?:'in'|'out',onDone:()=>void}){
+export default function FaceCamera({userId,assignmentId,action,onDone,confirmFrames=3,minimumSamples=5}:{userId?:string,assignmentId?:string,action?:'in'|'out',confirmFrames?:number,minimumSamples?:number,onDone:()=>void}){
   const video=useRef<HTMLVideoElement>(null),stream=useRef<MediaStream|null>(null),stopped=useRef(false);
   const [message,setMessage]=useState('Đang mở camera…'),[count,setCount]=useState(0),[done,setDone]=useState(false),[error,setError]=useState(false);
+  const [requiredFrames,setRequiredFrames]=useState(confirmFrames);
   useEffect(()=>{
     let cancelled=false,timer:ReturnType<typeof setTimeout>;
     const attempt=crypto.randomUUID(); const started=Date.now(); stopped.current=false;
@@ -19,15 +20,17 @@ export default function FaceCamera({userId,assignmentId,action,onDone}:{userId?:
       try{
         const result=userId?await write(`/faces/${userId}/enroll`,{image,consent:true}):await write('/faces/punch',{image,assignment_id:assignmentId,action,attempt_id:attempt});
         if(cancelled)return;
+        if(!userId)setRequiredFrames(result.required||confirmFrames);
         setError(false);setCount(result.samples||result.count);setMessage(result.message);
         if(result.confirmed||(userId&&result.samples>=20)){setDone(true);stop();onDone();return;}
       }catch(e){
         if(cancelled)return;
         const err=e as Error & {status:number};setMessage(err.message);setError(true);
         if(!userId)setCount(0);
-        if([401,403,503,429].includes(err.status)||(err.status===409&&!userId)){stop();return;}
+        if(!err.status||[401,403,429].includes(err.status)||err.status>=500||(err.status===409&&
+          (!err.message.includes('Cần ảnh mới')||userId))){stop();return;}
       }
-      if(!cancelled&&!stopped.current)timer=setTimeout(frame,userId?1300:800);
+      if(!cancelled&&!stopped.current)timer=setTimeout(frame,userId?1300:1200);
     }
     async function start(){
       try{
@@ -35,7 +38,7 @@ export default function FaceCamera({userId,assignmentId,action,onDone}:{userId?:
         const media=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480},facingMode:'user'},audio:false});
         if(cancelled){media.getTracks().forEach(t=>t.stop());return;}
         stream.current=media;video.current!.srcObject=media;await video.current!.play();
-        setMessage(userId?'Nhìn thẳng rồi xoay nhẹ. Hệ thống tự lưu các mẫu khác nhau.':'Đưa khuôn mặt vào khung. Hệ thống tự xác nhận 3 ảnh liên tiếp.');
+        setMessage(userId?'Nhìn thẳng rồi xoay nhẹ. Hệ thống tự lưu các mẫu khác nhau.':`Đưa khuôn mặt vào khung. Hệ thống tự xác nhận ${confirmFrames} ảnh liên tiếp.`);
         timer=setTimeout(frame,1200);
       }catch(e){if(!cancelled){setError(true);setMessage((e as Error).message);stop();}}
     }
@@ -45,6 +48,6 @@ export default function FaceCamera({userId,assignmentId,action,onDone}:{userId?:
   },[]);
   return <div className="camera-panel"><div className="camera-stage"><video ref={video} playsInline muted/><div className={'face-guide '+(done?'success':'')}/><div className="camera-label">{done?<CheckCircle2 size={16}/>:<Camera size={16}/>} {userId?'Đăng ký mẫu':'Xác minh khuôn mặt'}</div></div>
     <div className={'camera-message '+(error?'error':'')} role="status">{done&&<CheckCircle2/>}<p>{message}</p></div>
-    <div className="sample-progress"><div style={{width:`${Math.min(100,count/(userId?20:3)*100)}%`}}/></div><p className="muted small">{userId?`${count} mẫu · tối thiểu 5 · mục tiêu 20`:`${count}/3 ảnh được xác nhận`}</p>
+    <div className="sample-progress"><div style={{width:`${Math.min(100,count/(userId?20:requiredFrames)*100)}%`}}/></div><p className="muted small">{userId?`${count} mẫu · tối thiểu ${minimumSamples} · mục tiêu 20`:`${count}/${requiredFrames} ảnh được xác nhận`}</p>
     <div className="notice"><VideoOff size={17}/><span>Không lưu ảnh/video gốc. Bản này chưa có chống giả mạo bằng ảnh hoặc video.</span></div></div>;
 }
