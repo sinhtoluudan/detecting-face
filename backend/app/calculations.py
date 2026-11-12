@@ -60,7 +60,9 @@ def calculate(assignment, attendance, approved, now):
                 lo, hi = max(a,rs), min(b,re)
                 if hi > lo:
                     overtime += max(0, (hi-lo).total_seconds()/60-overlap(lo,hi,start,end))
-    if a and not b:
+    if a and not b and (attendance or {}).get('single_scan'):
+        status = 'late' if late else 'present'
+    elif a and not b:
         status = 'missing_out' if now > end else 'working'
     elif a and b:
         status = 'late' if late else ('early' if early else 'present')

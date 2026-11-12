@@ -25,7 +25,7 @@ export default function FaceCamera({userId,assignmentId,action,onDone}:{userId?:
         if(cancelled)return;
         const err=e as Error & {status:number};setMessage(err.message);setError(true);
         if(!userId)setCount(0);
-        if([401,403,503,429].includes(err.status)||(err.status===409&&!userId)){stop();return;}
+        if([401,403,503,429].includes(err.status)||(err.status===409&&!userId&&err.message!=='Cần ảnh mới từ camera để xác nhận tiếp')){stop();return;}
       }
       if(!cancelled&&!stopped.current)timer=setTimeout(frame,userId?1300:800);
     }

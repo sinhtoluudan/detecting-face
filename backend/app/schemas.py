@@ -42,8 +42,12 @@ class ShiftInput(Input):
     color: str = Field(default='#2563eb', pattern=r'^#[0-9a-fA-F]{6}$')
     active: bool = True
 
+    weekdays: list[int] = Field(default_factory=lambda: list(range(5)), min_length=1, max_length=7)
+
     @model_validator(mode='after')
     def validate_break(self):
+        if len(set(self.weekdays)) != len(self.weekdays) or any(day not in range(7) for day in self.weekdays):
+            raise ValueError('Chọn các thứ khác nhau từ Thứ Hai đến Chủ nhật')
         def minute(t): return t.hour * 60 + t.minute
         start, end = minute(self.start), minute(self.end)
         duration = (end - start) % 1440

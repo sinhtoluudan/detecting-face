@@ -1,9 +1,10 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from secrets import compare_digest
+from fastapi import APIRouter, Depends, Header, HTTPException
 from . import database as store, config
-from .schemas import FaceEnroll, FacePunch, ReasonInput
+from .schemas import FaceEnroll, FaceFrame, FacePunch, ReasonInput
 from .security import current_user, roles, audit, throttle, visible_ids
-from .services import get, serialized, punch
+from .services import get, serialized, punch, check_face_shift, bounds
 from .face_service import extract, normalize, match, gallery
 
 router=APIRouter(prefix='/faces',tags=['Khuôn mặt — kế thừa nhánh khang'])
@@ -51,38 +52,56 @@ def delete_face(user_id: str,data: ReasonInput,user=Depends(hr)):
     audit(user,'face.delete',user_id,reason=data.reason)
     return {'message':'Đã xóa mẫu khuôn mặt đang lưu'}
 
-@router.post('/punch')
+@router.post('/kiosk/punch')
 @serialized
-def face_punch(data: FacePunch,user=Depends(current_user)):
-    throttle('face:'+user['_id'],60,60)
-    assignment=get('assignments',data.assignment_id)
-    if assignment['user_id']!=user['_id']:
-        raise HTTPException(403,'Không được chấm công cho người khác')
-    key=user['_id']+':'+data.attempt_id
-    state=store.db.face_attempts.find_one({'_id':key})
-    if state and state.get('completed'):
-        raise HTTPException(409,'Lượt xác nhận đã dùng. Bắt đầu lượt mới')
+def kiosk_punch(data: FaceFrame, kiosk_key: str = Header(default='', alias='X-FaceCam-Kiosk')):
+    secret = config.FACECAM_KIOSK_KEY
+    if not secret or not compare_digest(kiosk_key.encode(), secret.encode()):
+        raise HTTPException(403, 'Máy này chưa được cấp quyền chấm công')
+    throttle('face:kiosk', 60, 60)
+    key = 'kiosk'
     try:
-        vector,_,frame_hash=extract(data.image)
+        vector, _, frame_hash = extract(data.image)
     except HTTPException:
-        store.db.face_attempts.delete_one({'_id':key,'completed':{'$ne':True}})
+        store.db.face_attempts.delete_one({'_id': key})
         raise
-    candidate,score,gap=match(vector,gallery(),threshold=config.FACE_THRESHOLD,margin=config.FACE_MARGIN,min_samples=5)
-    if candidate!=user['_id']:
-        store.db.face_attempts.delete_one({'_id':key,'completed':{'$ne':True}})
-        raise HTTPException(422,'Khuôn mặt chưa khớp tài khoản đang đăng nhập. Thử lại với mặt rõ hoặc liên hệ HR')
-    if (not state or state['expires_at']<store.now() or state.get('assignment_id')!=data.assignment_id
-            or state.get('action')!=data.action):
-        state={'_id':key,'count':0,'hashes':[],'user_id':user['_id'],'assignment_id':data.assignment_id,'action':data.action}
-    if frame_hash in state['hashes']:
-        raise HTTPException(409,'Cần ảnh mới từ camera để xác nhận tiếp')
-    state['count']+=1; state['hashes'].append(frame_hash)
-    state['expires_at']=store.now()+timedelta(seconds=15)
-    completed=state['count']>=3
-    if completed:
-        result=punch(user,data.assignment_id,data.action,source='face')
-        state['completed']=True
-        store.db.face_attempts.replace_one({'_id':key},state,upsert=True)
-        return {'confirmed':True,'count':3,'attendance':result,'message':'Đã xác nhận khuôn mặt và ghi nhận công'}
-    store.db.face_attempts.replace_one({'_id':key},state,upsert=True)
-    return {'confirmed':False,'count':state['count'],'message':f'Đang xác nhận {state["count"]}/3'}
+
+    candidate, _, _ = match(vector, gallery(), threshold=config.FACE_THRESHOLD,
+                            margin=config.FACE_MARGIN, min_samples=5)
+    person = store.db.users.find_one({'_id': candidate, 'active': True, 'role': {'$ne': 'admin'}}) if candidate else None
+    if not person:
+        store.db.face_attempts.delete_one({'_id': key})
+        raise HTTPException(422, 'Chưa nhận ra nhân viên đã đăng ký')
+
+    current = store.now()
+    today = current.astimezone(config.TZ).date()
+    assignments = store.db.assignments.find({'user_id': candidate, 'date': {
+        '$in': [today.isoformat(), (today - timedelta(days=1)).isoformat()]}})
+    for assignment in assignments:
+        start, end, _ = bounds(assignment['date'], assignment['shift'])
+        if start <= current < end:
+            break
+    else:
+        store.db.face_attempts.delete_one({'_id': key})
+        raise HTTPException(409, f"{person['name']} chưa có ca đang diễn ra")
+
+    check_face_shift(assignment, current)
+    state = store.db.face_attempts.find_one({'_id': key})
+    if (not state or state['expires_at'] <= current or state['user_id'] != candidate
+            or state['assignment_id'] != assignment['_id']):
+        state = {'_id': key, 'user_id': candidate, 'assignment_id': assignment['_id'], 'hashes': []}
+    if frame_hash not in state['hashes']:
+        state['hashes'].append(frame_hash)
+    count = len(state['hashes'])
+    if count >= 3:
+        punch(person, assignment['_id'], 'in', source='face')
+        store.db.face_attempts.delete_one({'_id': key})
+        return {'confirmed': True, 'message': f"{person['name']} · Chấm công thành công"}
+    state['expires_at'] = current + timedelta(seconds=15)
+    store.db.face_attempts.replace_one({'_id': key}, state, upsert=True)
+    return {'confirmed': False, 'message': f"Đang xác nhận {person['name']} · {count}/3"}
+
+
+@router.post('/punch')
+def face_punch(data: FacePunch, user=Depends(current_user)):
+    raise HTTPException(403, 'Vui lòng chấm công tại máy FaceCam chung')

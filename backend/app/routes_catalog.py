@@ -111,6 +111,15 @@ def update_shift(id: str,data: ShiftInput,user=Depends(hr)):
     audit(user,'shift.update',id,store.public(old),data.model_dump(mode='json'))
     return store.public(get('shifts',id))
 
+@router.delete('/shifts/{id}')
+@serialized
+def delete_shift(id: str,user=Depends(hr)):
+    old=get('shifts',id)
+    # Assignments retain their own copy of the shift for attendance and history.
+    store.db.shifts.delete_one({'_id':id})
+    audit(user,'shift.delete',id,before=store.public(old))
+    return {'message':'Đã xóa ca làm khỏi danh mục'}
+
 @router.get('/assignments')
 def assignments(month: str,user=Depends(current_user)):
     return enriched_assignments(user,month)
@@ -121,7 +130,8 @@ def assign(data: AssignmentInput,user=Depends(management)):
     shift=get('shifts',data.shift_id)
     if not shift['active']:
         raise HTTPException(409,'Ca làm đã ngưng sử dụng')
-    days=[d for d in dates(data.start_date,data.end_date) if d.weekday() in data.weekdays]
+    allowed_days = set(shift.get('weekdays', range(7))).intersection(data.weekdays)
+    days=[d for d in dates(data.start_date,data.end_date) if d.weekday() in allowed_days]
     if not days:
         raise HTTPException(422,'Không có ngày nào khớp thứ đã chọn')
     planned=[]

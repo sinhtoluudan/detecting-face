@@ -7,7 +7,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from . import database as store, config
 from .schemas import PunchInput, RequestInput, DecisionInput, ReasonInput
 from .security import current_user, roles, require_visible, audit, visible_ids
-from .services import get, check_open, serialized, punch, scoped_query, report, dates, month_range
+from .services import get, check_open, serialized, scoped_query, report, dates, month_range
 from .calculations import bounds, parse_dt
 
 router=APIRouter(tags=['Chấm công và đơn từ'])
@@ -16,22 +16,27 @@ hr=roles('admin','hr')
 
 @router.get('/attendance/today')
 def today(user=Depends(current_user)):
-    local=store.now().astimezone(config.TZ).date()
+    current=store.now()
+    local=current.astimezone(config.TZ).date()
     candidates=list(store.db.assignments.find({'user_id':user['_id'],'date':{
         '$gte':(local-timedelta(days=1)).isoformat(),'$lte':(local+timedelta(days=1)).isoformat()}}).sort('date',1))
     result=[]
+    active_assignment=None
     for assignment in candidates:
         start,end,_=bounds(assignment['date'],assignment['shift'])
-        if assignment['date']==local.isoformat() or start-timedelta(hours=2)<=store.now()<=end+timedelta(hours=8):
+        if assignment['date']==local.isoformat() or start-timedelta(hours=2)<=current<=end+timedelta(hours=8):
             attendance=store.db.attendance.find_one({'assignment_id':assignment['_id']})
-            result.append({**store.public(assignment),'attendance':store.public(attendance)})
+            row={**store.public(assignment),'attendance':store.public(attendance)}
+            result.append(row)
+            if start <= current < end:
+                active_assignment=row
     profile=store.db.face_profiles.find_one({'_id':user['_id']})
-    return {'date':local.isoformat(),'server_time':store.now(),'assignments':result,
+    return {'date':local.isoformat(),'server_time':store.now(),'assignments':result,'active_assignment':active_assignment,
             'face_enabled':config.FACE_ENABLED,'face_samples':len((profile or {}).get('vectors',[]))}
 
 @router.post('/attendance/punch')
 def manual_punch(data: PunchInput,user=Depends(current_user)):
-    return punch(user,data.assignment_id,data.action)
+    raise HTTPException(403, 'Vui lòng chấm công tại máy FaceCam chung')
 
 @router.get('/requests')
 def requests(month: str,user=Depends(current_user)):

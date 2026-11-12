@@ -11,6 +11,7 @@ ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127
 COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
 SEED_DEMO = os.getenv('SEED_DEMO', 'false').lower() == 'true'
 DEMO_PASSWORD = os.getenv('DEMO_PASSWORD', '')
+FACECAM_KIOSK_KEY = os.getenv('FACECAM_KIOSK_KEY', '')
 FACE_ENABLED = os.getenv('FACE_ENABLED', 'false').lower() == 'true'
 FACE_THRESHOLD = float(os.getenv('FACE_THRESHOLD', '0.50'))
 FACE_MARGIN = float(os.getenv('FACE_MARGIN', '0.08'))

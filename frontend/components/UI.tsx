@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Inbox, LoaderCircle } from 'lucide-react';
 import { statusLabels } from '@/lib/api';
 export function Badge({status}:{status:string}) { return <span className={'badge '+status}><i/>{statusLabels[status]||status}</span>; }
@@ -19,9 +19,28 @@ export function Modal({title,children,onClose}:{title:string,children:React.Reac
   return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" aria-label="Đóng" onClick={onClose}><X size={20}/></button></div>{children}</div></div>;
 }
 export type Field={name:string,label:string,type?:string,required?:boolean,options?:{value:string,label:string}[],hint?:string,min?:number,max?:number,step?:string};
+function WeekdayPicker({name, initial}: {name: string, initial: number[]}) {
+  const labels = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ nhật'];
+  const [days, setDays] = useState(initial);
+  return <fieldset className="wide">
+    <legend>Áp dụng vào các thứ trong tuần</legend>
+    <div className="weekday-picker">
+      {labels.map((label, day) => <label key={day}>
+        <input type="checkbox" name={name} value={day} checked={days.includes(day)}
+          onChange={e => setDays(e.target.checked ? [...days, day] : days.filter(value => value !== day))}/>
+        <span>{label}</span>
+      </label>)}
+      <label><input type="checkbox" checked={days.length === labels.length}
+        onChange={e => setDays(e.target.checked ? labels.map((_, day) => day) : [])}/>
+        <span>Áp dụng cho tất cả</span>
+      </label>
+    </div>
+  </fieldset>;
+}
+
 export function Editor({fields,values={},busy,onSubmit,onClose,submit='Lưu thay đổi'}:{fields:Field[],values?:Record<string,any>,busy:boolean,onSubmit:(data:Record<string,any>)=>void,onClose:()=>void,submit?:string}){
-  return <form onSubmit={e=>{e.preventDefault();const raw=new FormData(e.currentTarget); const d:Record<string,any>={};fields.forEach(f=>{const v=raw.get(f.name);d[f.name]=f.type==='checkbox'?v==='on':f.type==='number'?Number(v):v;});onSubmit(d);}}>
-    <div className="form-grid">{fields.map(f=><label className={f.type==='textarea'?'wide':''} key={f.name}><span>{f.label}{f.required&&' *'}</span>
+  return <form onSubmit={e=>{e.preventDefault();const raw=new FormData(e.currentTarget); const d:Record<string,any>={};fields.forEach(f=>{const v=raw.get(f.name);d[f.name]=f.type==='weekdays'?raw.getAll(f.name).map(Number):f.type==='checkbox'?v==='on':f.type==='number'?Number(v):v;});onSubmit(d);}}>
+    <div className="form-grid">{fields.map(f=>f.type==='weekdays'?<WeekdayPicker key={f.name} name={f.name} initial={values[f.name]}/>:<label className={f.type==='textarea'?'wide':''} key={f.name}><span>{f.label}{f.required&&' *'}</span>
       {f.options?<select name={f.name} defaultValue={values[f.name]??''} required={f.required}>{f.options.map(o=><option value={o.value} key={o.value}>{o.label}</option>)}</select>:
        f.type==='textarea'?<textarea name={f.name} defaultValue={values[f.name]||''} rows={3} required={f.required} maxLength={1000}/>:
        f.type==='checkbox'?<input className="checkbox" type="checkbox" name={f.name} defaultChecked={values[f.name]??true}/>:

@@ -39,6 +39,8 @@ def seed():
     while day<=today+timedelta(days=14):
         if day.weekday()<5 or day==today:
             for i,u in enumerate(users):
+                if u['role']=='admin':
+                    continue
                 a={'_id':store.uid(),'user_id':u['_id'],'date':day.isoformat(),'shift_id':'shift-office','shift':store.public(shifts[0]),'holiday':''}
                 store.db.assignments.insert_one(a)
                 if day<today and (day.day+i)%13!=0:
