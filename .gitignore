@@ -2,3 +2,15 @@
 __pycache__/
 data/
 *.pyc
+
+# Web attendance runtime and secrets
+web/**/node_modules/
+web/**/.next/
+web/**/.venv/
+web/**/__pycache__/
+web/**/.pytest_cache/
+web/**/*.pyc
+web/**/.env
+web/.env
+web/**/.env.local
+web/**/*.tsbuildinfo

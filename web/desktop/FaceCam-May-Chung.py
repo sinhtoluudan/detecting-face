@@ -2,6 +2,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from pathlib import Path
 import json
 import os
 import sys
@@ -10,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 import webbrowser
 
-sys.path.insert(0, r'D:\FaceCam-ChamCong')
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app import App, Image, tk, ttk
 
 

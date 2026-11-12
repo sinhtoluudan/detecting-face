@@ -1,7 +1,7 @@
 ﻿param([switch]$CaiDat)
 $ErrorActionPreference = 'Stop'
-$python = 'D:\FaceCam-ChamCong\.venv\Scripts\python.exe'
 $web = Split-Path $PSScriptRoot -Parent
+$python = Join-Path (Split-Path $web -Parent) '.venv\Scripts\python.exe'
 $private = Join-Path $env:LOCALAPPDATA 'FaceCam-Kiosk'
 $keyFile = Join-Path $private 'facecam-kiosk.key'
 if (!(Test-Path -LiteralPath $keyFile)) {

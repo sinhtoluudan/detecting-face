@@ -1,0 +1,13 @@
+.git
+**/.venv
+**/node_modules
+**/.next
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/.env
+**/.env.local
+**/data
+**/*.db
+**/*.zip
+**/tests

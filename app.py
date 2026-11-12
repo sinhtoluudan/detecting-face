@@ -31,7 +31,6 @@ class App:
         self.last_live = 0.0
         self.last_metrics = 0.0
         self.camera_fps = self.analysis_fps = 0.0
-        self.camera_index = tk.StringVar(value=str(self.config['camera_index']))
         self.threshold = tk.StringVar(value=str(self.config['similarity_threshold']))
         self.use_regions = tk.BooleanVar(value=True)
         self.visible_regions = {key:tk.BooleanVar(value=True) for key in LABELS}
@@ -42,6 +41,7 @@ class App:
         self.refresh_people()
         root.protocol('WM_DELETE_WINDOW',self.close)
         root.after(20,self.poll)
+        root.after_idle(self.start)
 
     def load_font(self,size):
         for path in ['C:/Windows/Fonts/arialbd.ttf','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf']:
@@ -60,13 +60,6 @@ class App:
         ttk.Label(outer,text='FaceCam',font=('Segoe UI',23,'bold')).grid(row=0,column=0,sticky='w')
         bar = ttk.Frame(outer)
         bar.grid(row=1,column=0,sticky='ew',pady=10)
-        ttk.Label(bar,text='Camera:').pack(side='left')
-        ttk.Spinbox(bar,from_=0,to=10,textvariable=self.camera_index,width=4).pack(side='left',padx=5)
-        self.start_button = ttk.Button(bar,text='Bật camera',command=self.start)
-        self.start_button.pack(side='left',padx=4)
-        ttk.Button(bar,text='Tắt camera',command=self.stop).pack(side='left',padx=4)
-        self.rec_button = ttk.Button(bar,text='Bắt đầu nhận diện',command=self.toggle_recognition)
-        self.rec_button.pack(side='left',padx=4)
         ttk.Label(bar,text='Ngưỡng:').pack(side='left',padx=(12,4))
         ttk.Entry(bar,textvariable=self.threshold,width=6).pack(side='left')
         body = ttk.Frame(outer)
@@ -180,19 +173,27 @@ class App:
         if self.worker is not None:
             return
         try:
-            index = int(self.camera_index.get())
+            index = int(self.config['camera_index'])
             if not 0<=index<=10:
                 raise ValueError()
         except ValueError:
             messagebox.showerror('Camera','Nhập chỉ số camera từ 0 đến 10.')
             return
+        try:
+            self.active_threshold = float(self.threshold.get())
+            if not 0 < self.active_threshold < 1:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror('Ng??ng', 'Nh?p s? t? 0 ??n 1, v? d? 0.50.')
+            return
+        self.recognizing = True
+        self.status.set('?ang m? camera ?? t? ??ng nh?n di?n.')
         self.latest = None
         self.error_seen = False
         self.last_live = 0.0
         self.camera_fps = self.analysis_fps = 0.0
         self.reset_names()
         self.worker = CameraWorker(index,self.config)
-        self.start_button.configure(state='disabled')
         self.worker.start()
 
     def stop(self):
@@ -201,30 +202,9 @@ class App:
         self.recognizing = False
         self.latest = None
         self.reset_names()
-        self.rec_button.configure(text='Bắt đầu nhận diện')
         self.preview.configure(image='',text='Camera đã dừng')
         self.preview.image = None
         self.status.set('Đã dừng camera và nhận diện.')
-
-    def toggle_recognition(self):
-        if not self.recognizing:
-            if not self.worker or self.worker.stop_event.is_set():
-                messagebox.showinfo('Camera','Bật camera trước.')
-                return
-            try:
-                self.active_threshold = float(self.threshold.get())
-                if not 0<self.active_threshold<1:
-                    raise ValueError()
-            except ValueError:
-                messagebox.showerror('Ngưỡng','Nhập số từ 0 đến 1, ví dụ 0.50.')
-                return
-            if not any(len(p['vectors'])>=self.config['min_samples'] for p in self.gallery.values()):
-                messagebox.showinfo('Chưa đủ mẫu','Cần ít nhất một người có 5 mẫu. Lưu thêm mẫu rồi thử lại.')
-                return
-        self.recognizing = not self.recognizing
-        self.reset_names()
-        self.rec_button.configure(text='Dừng nhận diện' if self.recognizing else 'Bắt đầu nhận diện')
-        self.status.set('Đang nhận diện nhiều khuôn mặt. Mỗi tên nằm trên khung của người tương ứng.' if self.recognizing else 'Nhận diện đã dừng; camera vẫn chạy.')
 
     def analyze(self,item):
         self.analysis_fps = item['fps']
@@ -302,8 +282,6 @@ class App:
                 self.latest = None
                 self.recognizing = False
                 self.reset_names()
-                self.start_button.configure(state='normal')
-                self.rec_button.configure(text='Bắt đầu nhận diện')
                 self.preview.configure(image='',text='Camera đã tắt')
                 self.preview.image = None
             elif self.last_live and time.monotonic()-self.last_live>1:
