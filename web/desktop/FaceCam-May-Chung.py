@@ -1,53 +1,115 @@
-﻿"""Connect the existing FaceCam Tkinter window to the shared attendance API."""
+﻿"""Windows webcam client for the shared attendance API."""
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
 import os
 from pathlib import Path
+from queue import Empty, Queue
 import sys
+from threading import Event
 import time
+import tkinter as tk
+from tkinter import ttk
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 import webbrowser
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app import App, Image, tk, ttk
+from PIL import Image, ImageTk
+
+WEB = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WEB))
+from camera import CaptureLoop
 
 
-class SharedCamera(App):
+class SharedCamera:
     def __init__(self, root, key):
+        self.root = root
         self.key = key
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.pending = None
         self.next_scan = 0
-        self.kiosk_status = tk.StringVar(value='Đang chờ camera…')
-        super().__init__(root)
-        self.root.title('FaceCam · Máy chấm công chung')
-        self.status.set('Bấm Bật camera để bắt đầu chấm công.')
-
-    def build_ui(self):
-        super().build_ui()
-        controls = self.rec_button.master.pack_slaves()
-        for control in controls[controls.index(self.rec_button):]:
-            control.pack_forget()
-        side = self.people_list.master
-        for widget in side.winfo_children():
-            widget.destroy()
+        self.worker = None
+        self.config = json.loads((WEB / 'config.json').read_text(encoding='utf-8-sig'))
+        self.index = tk.StringVar(value=str(self.config['camera_index']))
+        self.kiosk_status = tk.StringVar(value='Bấm Bật camera để bắt đầu chấm công.')
+        root.title('FaceCam · Máy chấm công chung')
+        root.geometry('1000x620')
+        controls = ttk.Frame(root, padding=10)
+        controls.pack(fill='x')
+        ttk.Label(controls, text='Camera:').pack(side='left')
+        ttk.Spinbox(controls, from_=0, to=10, width=4, textvariable=self.index).pack(side='left', padx=5)
+        self.start_button = ttk.Button(controls, text='Bật camera', command=self.start)
+        self.start_button.pack(side='left', padx=4)
+        self.stop_button = ttk.Button(controls, text='Tắt camera', command=self.stop, state='disabled')
+        self.stop_button.pack(side='left', padx=4)
+        side = ttk.Frame(root, padding=12)
+        side.pack(side='right', fill='y')
         ttk.Label(side, text='Chấm công bằng khuôn mặt', font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        ttk.Label(side, text='Đưa một khuôn mặt vào giữa khung.', wraplength=290).pack(anchor='w', pady=10)
+        ttk.Label(side, text='Đưa một khuôn mặt vào giữa khung.').pack(anchor='w', pady=10)
         ttk.Label(side, textvariable=self.kiosk_status, wraplength=290).pack(anchor='w', pady=10)
         ttk.Button(side, text='Hồ sơ khuôn mặt trên web', command=lambda: webbrowser.open(
             'http://localhost:3000/faces')).pack(anchor='w')
+        self.preview = tk.Label(root, bg='#101827', fg='white', text='Camera chưa bật', width=1, height=1)
+        self.preview.pack(fill='both', expand=True, padx=10, pady=10)
+        root.protocol('WM_DELETE_WINDOW', self.close)
+        self.timer = root.after(30, self.poll)
 
-    def refresh_people(self, selected=None):
-        self.gallery = {}
+    def start(self):
+        if self.worker is not None:
+            return
+        try:
+            index = int(self.index.get())
+            if not 0 <= index <= 10:
+                raise ValueError
+        except ValueError:
+            self.kiosk_status.set('Chọn chỉ số camera từ 0 đến 10.')
+            return
+        self.frames = Queue(maxsize=1)
+        self.events = Queue()
+        self.worker = CaptureLoop(index, self.config, Event(), self.frames, self.events)
+        self.start_button.configure(state='disabled')
+        self.stop_button.configure(state='normal')
+        self.kiosk_status.set('Đang mở camera…')
+        self.next_scan = 0
+        self.worker.start()
 
-    def analyze(self, item):
-        self.analysis_fps = item['fps']
+    def stop(self):
+        if self.worker:
+            self.worker.stop_event.set()
+        self.stop_button.configure(state='disabled')
+        self.kiosk_status.set('Đã tắt camera.')
 
-    def show_live(self, item):
-        super().show_live(item)
+    def poll(self):
+        if self.worker:
+            try:
+                while True:
+                    _, message = self.events.get_nowait()
+                    self.kiosk_status.set(message)
+            except Empty:
+                pass
+            if self.worker.stop_event.is_set():
+                self.preview.configure(image='', text='Camera đã tắt')
+                self.preview.image = None
+                self.stop_button.configure(state='disabled')
+                if not self.worker.is_alive():
+                    self.worker = None
+                    self.start_button.configure(state='normal')
+            else:
+                try:
+                    frame = self.frames.get_nowait()
+                except Empty:
+                    pass
+                else:
+                    self.show_live(frame['rgb'])
+        self.timer = self.root.after(30, self.poll)
+
+    def show_live(self, rgb):
+        preview = Image.fromarray(rgb)
+        preview.thumbnail((max(1, self.preview.winfo_width()), max(1, self.preview.winfo_height())))
+        photo = ImageTk.PhotoImage(preview)
+        self.preview.configure(image=photo, text='')
+        self.preview.image = photo
         if self.pending is not None:
             if not self.pending.done():
                 return
@@ -55,7 +117,7 @@ class SharedCamera(App):
             self.pending = None
             self.next_scan = time.monotonic() + 1.5
         if time.monotonic() >= self.next_scan:
-            self.pending = self.pool.submit(self.scan, item['rgb'].copy())
+            self.pending = self.pool.submit(self.scan, rgb.copy())
 
     def scan(self, rgb):
         image = Image.fromarray(rgb)
@@ -82,8 +144,11 @@ class SharedCamera(App):
             return 'Chưa kết nối được máy chủ FaceCam ở cổng 8000.'
 
     def close(self):
+        self.root.after_cancel(self.timer)
+        if self.worker:
+            self.worker.stop_event.set()
         self.pool.shutdown(wait=False, cancel_futures=True)
-        super().close()
+        self.root.destroy()
 
 
 if __name__ == '__main__':
