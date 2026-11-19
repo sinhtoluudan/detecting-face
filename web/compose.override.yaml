@@ -1,0 +1,5 @@
+volumes:
+  mongo_data:
+    name: facecam_website_mongo_data
+  input_data:
+    name: facecam_website_input_data

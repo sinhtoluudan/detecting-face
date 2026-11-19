@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from . import database as store, config
 from .schemas import FaceEnroll, FaceFrame, FacePunch, ReasonInput
 from .security import current_user, roles, audit, throttle, visible_ids
-from .services import get, serialized, punch, check_face_shift, bounds
+from .services import get, serialized, kiosk_slot, check_open
 from .face_service import extract, normalize, match, gallery
 
 router=APIRouter(prefix='/faces',tags=['Khuôn mặt — kế thừa nhánh khang'])
 hr=roles('admin','hr')
+KIOSK_LABELS = {'on_time': 'Đúng giờ', 'late': 'Đi trễ', 'outside_shift': 'Ngoài ca'}
 
 @router.get('/profiles')
 def profiles(user=Depends(current_user)):
@@ -68,36 +69,45 @@ def kiosk_punch(data: FaceFrame, kiosk_key: str = Header(default='', alias='X-Fa
 
     candidate, _, _ = match(vector, gallery(), threshold=config.FACE_THRESHOLD,
                             margin=config.FACE_MARGIN, min_samples=5)
-    person = store.db.users.find_one({'_id': candidate, 'active': True, 'role': {'$ne': 'admin'}}) if candidate else None
+    person = store.db.users.find_one({'_id': candidate, 'active': True}) if candidate else None
     if not person:
         store.db.face_attempts.delete_one({'_id': key})
         raise HTTPException(422, 'Chưa nhận ra nhân viên đã đăng ký')
 
     current = store.now()
-    today = current.astimezone(config.TZ).date()
-    assignments = store.db.assignments.find({'user_id': candidate, 'date': {
-        '$in': [today.isoformat(), (today - timedelta(days=1)).isoformat()]}})
-    for assignment in assignments:
-        start, end, _ = bounds(assignment['date'], assignment['shift'])
-        if start <= current < end:
-            break
-    else:
-        store.db.face_attempts.delete_one({'_id': key})
-        raise HTTPException(409, f"{person['name']} chưa có ca đang diễn ra")
-
-    check_face_shift(assignment, current)
     state = store.db.face_attempts.find_one({'_id': key})
     if (not state or state['expires_at'] <= current or state['user_id'] != candidate
-            or state['assignment_id'] != assignment['_id']):
-        state = {'_id': key, 'user_id': candidate, 'assignment_id': assignment['_id'], 'hashes': []}
+            or 'first_seen' not in state):
+        state = {'_id': key, 'user_id': candidate, 'first_seen': current, 'hashes': []}
+    seen = state['first_seen']
+    day, shift, status = kiosk_slot(seen)
+    check_open(day)
+    shift_id = shift['id'] if shift else None
+    slot_id = f"kiosk:{candidate}:{day}:{shift_id or 'outside'}"
+    scheduled = store.db.assignments.find_one({'user_id': candidate, 'date': day, 'shift_id': shift_id}) if shift else None
+    assignment_id = scheduled['_id'] if scheduled else slot_id
+    existing = store.db.attendance.find_one({'assignment_id': {'$in': [assignment_id, slot_id]}})
+    if existing:
+        store.db.face_attempts.delete_one({'_id': key})
+        stamp = existing.get('check_in') or existing.get('check_out')
+        time_label = stamp.astimezone(config.TZ).strftime('%H:%M:%S') if stamp else ''
+        display = KIOSK_LABELS.get(existing.get('kiosk_status'), (shift or {}).get('name', 'Ngoài ca'))
+        raise HTTPException(409, f"{person['name']} · Đã chấm công {time_label} · {display}")
     if frame_hash not in state['hashes']:
         state['hashes'].append(frame_hash)
     count = len(state['hashes'])
     if count >= 3:
-        punch(person, assignment['_id'], 'in', source='face')
+        holiday = store.db.holidays.find_one({'_id': day}) or {}
+        shift_snapshot = shift or {'id': None, 'name': 'Ngoài ca', 'start': '', 'end': ''}
+        record = {'_id': store.uid(), 'assignment_id': assignment_id, 'user_id': candidate,
+                  'date': day, 'shift_id': shift_id, 'shift': shift_snapshot, 'holiday': holiday.get('name', ''),
+                  'check_in': seen, 'check_out': None, 'single_scan': True, 'source': 'face', 'kiosk_status': status}
+        store.db.attendance.insert_one(record)
+        audit(person, 'attendance.in', assignment_id, after=store.public(record))
         store.db.face_attempts.delete_one({'_id': key})
-        return {'confirmed': True, 'message': f"{person['name']} · Chấm công thành công"}
-    state['expires_at'] = current + timedelta(seconds=15)
+        label = KIOSK_LABELS[status]
+        return {'confirmed': True, 'status': status, 'message': f"{person['name']} · Chấm công thành công · {label}"}
+    state['expires_at'] = seen + timedelta(seconds=15)
     store.db.face_attempts.replace_one({'_id': key}, state, upsert=True)
     return {'confirmed': False, 'message': f"Đang xác nhận {person['name']} · {count}/3"}
 

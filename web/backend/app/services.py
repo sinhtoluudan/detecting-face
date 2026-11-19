@@ -57,6 +57,52 @@ def enriched_assignments(user, month):
              'employee_code': users.get(a['user_id'],{}).get('code','')}
             for a in store.db.assignments.find(query).sort([('date',1),('user_id',1)])]
 
+def kiosk_slot(current):
+    local_day = current.astimezone(config.TZ).date()
+    choices = []
+    for shift in store.db.shifts.find({'active': True}):
+        for offset in (-1, 0, 1):
+            day = local_day + timedelta(days=offset)
+            if day.weekday() not in shift.get('weekdays', range(7)):
+                continue
+            start, end, _ = bounds(day, shift)
+            if start - timedelta(minutes=30) <= current <= end:
+                choices.append((abs(current - start), start, shift['_id'], day, shift))
+    if not choices:
+        return local_day.isoformat(), None, 'outside_shift'
+    _, start, _, day, shift = min(choices)
+    status = 'on_time' if current <= start + timedelta(minutes=10) else 'late'
+    return day.isoformat(), store.public(shift), status
+
+def attendance_entries(query):
+    # Personal schedules are optional. A shared punch carries its historical shift snapshot.
+    schedules = list(store.db.assignments.find(query))
+    punches = list(store.db.attendance.find({'$or': [
+        {'assignment_id': {'$in': [a['_id'] for a in schedules]}},
+        {**query, 'kiosk_status': {'$exists': True}},
+    ]}))
+    by_id = {p['assignment_id']: p for p in punches}
+    by_slot = {(p['user_id'], p['date'], p['shift_id']): p
+               for p in punches if 'kiosk_status' in p}
+    used = set()
+    entries = []
+    for a in schedules:
+        shared = by_slot.get((a['user_id'], a['date'], a['shift_id']))
+        if shared:
+            used.add(shared['_id'])
+        punch = by_id.get(a['_id']) or shared
+        if punch:
+            used.add(punch['_id'])
+        entries.append((store.public(a), punch))
+    for p in punches:
+        if 'kiosk_status' in p and p['_id'] not in used:
+            entries.append(({'id': p['assignment_id'], 'user_id': p['user_id'], 'date': p['date'],
+                             'shift_id': p['shift_id'], 'holiday': p.get('holiday', '')}, p))
+    for a, p in entries:
+        if p and 'kiosk_status' in p:
+            a['shift'] = p['shift']
+    return sorted(entries, key=lambda entry: (entry[0]['date'], entry[0]['user_id'], entry[0]['shift']['start']))
+
 def report(user, month, live=False):
     start, end = month_range(month)
     closed = store.db.months.find_one({'_id': month, 'locked': True})
@@ -65,15 +111,16 @@ def report(user, month, live=False):
         rows = [r for r in closed['rows'] if ids is None or r['user_id'] in ids]
     else:
         rows = []
-        assignments = enriched_assignments(user, month)
-        ids = [a['id'] for a in assignments]
-        punches = {x['assignment_id']: x for x in store.db.attendance.find({'assignment_id': {'$in': ids}})}
+        query = {**scoped_query(user), 'date': {'$gte': start, '$lte': end}}
+        users = {u['_id']: u for u in store.db.users.find({}, {'name': 1, 'code': 1})}
         approved = list(store.db.requests.find({**scoped_query(user), 'status':'approved',
                           'start_date':{'$lte':end}, 'end_date':{'$gte':start}}))
-        for a in assignments:
+        for a, record in attendance_entries(query):
             requests = [r for r in approved if r['user_id']==a['user_id'] and r['start_date']<=a['date']<=r['end_date']]
-            rows.append({**a, **calculate(a, punches.get(a['id']), requests, store.now()),
-                         'source': punches.get(a['id'],{}).get('source',''),
+            employee = users.get(a['user_id'], {})
+            rows.append({**a, **calculate(a, record, requests, store.now()),
+                         'employee_name': employee.get('name', 'Đã nghỉ việc'), 'employee_code': employee.get('code', ''),
+                         'source': (record or {}).get('source',''),
                          'holiday': a.get('holiday','')})
     return {'month': month, 'locked': bool(closed), 'locked_at': (closed or {}).get('locked_at'), 'rows': rows,
             'totals': {key: sum(r.get(key,0) for r in rows) for key in

@@ -2,8 +2,10 @@ from datetime import datetime,timedelta,timezone
 from io import BytesIO
 import pytest
 from openpyxl import load_workbook
+from fastapi import HTTPException
 from app import database as store, config
 from app.calculations import bounds, calculate
+from app.services import punch
 
 
 def post(client,url,data):
@@ -104,14 +106,20 @@ def test_assign_and_delete(client,login):
 
 def test_punch_duplicate_checkout(client,login,monkeypatch):
     login('employee');a=own_assignment();start,end=at_work(monkeypatch,a)
-    payload={'assignment_id':a['_id'],'action':'out'}
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
-    payload['action']='in';post(client,'/attendance/punch',payload)
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
+    employee=store.db.users.find_one({'_id':a['user_id']})
+    for action in ('in','out'):
+        assert client.post('/api/attendance/punch',json={'assignment_id':a['_id'],'action':action}).status_code==403
+    def reject(action):
+        with pytest.raises(HTTPException) as error:
+            punch(employee,a['_id'],action)
+        assert error.value.status_code==409
+    reject('out')
+    punch(employee,a['_id'],'in')
+    reject('in')
     monkeypatch.setattr(store,'now',lambda:end)
     # Test login sessions may expire during overnight tests; this is a daytime shift.
-    payload['action']='out';post(client,'/attendance/punch',payload)
-    assert client.post('/api/attendance/punch',json=payload).status_code==409
+    punch(employee,a['_id'],'out')
+    reject('out')
     r=client.get('/api/reports',params={'month':today()[:7]}).json()
     row=next(r for r in r['rows'] if r['date']==today())
     assert row['worked_minutes']==470 and row['late_minutes']==10
