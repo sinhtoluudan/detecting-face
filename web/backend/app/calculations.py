@@ -41,6 +41,11 @@ def worked_minutes(a, b, start, end, breaks):
     return max(0, minutes)
 
 def calculate(assignment, attendance, approved, now):
+    kiosk_status = (attendance or {}).get('kiosk_status') if (attendance or {}).get('source') == 'face' else None
+    if kiosk_status == 'outside_shift':
+        return {'status': kiosk_status, 'planned_minutes': 0, 'worked_minutes': 0, 'paid_leave_minutes': 0,
+                'leave_minutes': 0, 'credited_minutes': 0, 'late_minutes': 0, 'early_minutes': 0,
+                'overtime_minutes': 0, 'needs_review': True, 'check_in': parse_dt(attendance['check_in']), 'check_out': None}
     start, end, breaks = bounds(assignment['date'], assignment['shift'])
     planned = worked_minutes(start, end, start, end, breaks)
     a, b = parse_dt((attendance or {}).get('check_in')), parse_dt((attendance or {}).get('check_out'))
@@ -50,7 +55,10 @@ def calculate(assignment, attendance, approved, now):
     leave = min(max(0, planned-worked), sum(r.get('leave_hours',8)*60 for r in leaves))
     grace = assignment['shift'].get('grace_minutes', 5)
     late = max(0, int((a-start).total_seconds()/60)) if a else 0
-    late = late if late > grace else 0
+    if kiosk_status:
+        late = late if kiosk_status == 'late' else 0
+    else:
+        late = late if late > grace else 0
     early = max(0, int((end-b).total_seconds()/60)) if b else 0
     overtime = 0
     if a and b:
@@ -60,7 +68,9 @@ def calculate(assignment, attendance, approved, now):
                 lo, hi = max(a,rs), min(b,re)
                 if hi > lo:
                     overtime += max(0, (hi-lo).total_seconds()/60-overlap(lo,hi,start,end))
-    if a and not b and (attendance or {}).get('single_scan'):
+    if kiosk_status:
+        status = kiosk_status
+    elif a and not b and (attendance or {}).get('single_scan'):
         status = 'late' if late else 'present'
     elif a and not b:
         status = 'missing_out' if now > end else 'working'

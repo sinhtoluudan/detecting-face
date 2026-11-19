@@ -12,7 +12,7 @@ from datetime import timedelta
 from fastapi import HTTPException
 from . import config, database as store
 
-ROOT=Path(__file__).resolve().parents[3]
+ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0,str(ROOT))
 from core import normalize, match  # Original branch algorithm, not a replacement.

@@ -7,7 +7,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from . import database as store, config
 from .schemas import PunchInput, RequestInput, DecisionInput, ReasonInput
 from .security import current_user, roles, require_visible, audit, visible_ids
-from .services import get, check_open, serialized, scoped_query, report, dates, month_range
+from .services import get, check_open, serialized, scoped_query, report, dates, month_range, attendance_entries, kiosk_slot
 from .calculations import bounds, parse_dt
 
 router=APIRouter(tags=['Chấm công và đơn từ'])
@@ -18,18 +18,25 @@ hr=roles('admin','hr')
 def today(user=Depends(current_user)):
     current=store.now()
     local=current.astimezone(config.TZ).date()
-    candidates=list(store.db.assignments.find({'user_id':user['_id'],'date':{
-        '$gte':(local-timedelta(days=1)).isoformat(),'$lte':(local+timedelta(days=1)).isoformat()}}).sort('date',1))
+    candidates=attendance_entries({'user_id':user['_id'],'date':{
+        '$gte':(local-timedelta(days=1)).isoformat(),'$lte':(local+timedelta(days=1)).isoformat()}})
     result=[]
-    active_assignment=None
-    for assignment in candidates:
+    day,shift,_=kiosk_slot(current)
+    active_assignment=({'id': f"kiosk:{user['_id']}:{day}:{shift['id']}", 'user_id': user['_id'],
+                        'date': day, 'shift_id': shift['id'], 'shift': shift, 'attendance': None} if shift else None)
+    for assignment,attendance in candidates:
+        row={**assignment,'attendance':store.public(attendance)}
+        if not assignment['shift_id']:
+            if assignment['date']==local.isoformat():
+                result.append(row)
+            continue
         start,end,_=bounds(assignment['date'],assignment['shift'])
         if assignment['date']==local.isoformat() or start-timedelta(hours=2)<=current<=end+timedelta(hours=8):
-            attendance=store.db.attendance.find_one({'assignment_id':assignment['_id']})
-            row={**store.public(assignment),'attendance':store.public(attendance)}
             result.append(row)
-            if start <= current < end:
+            if shift and assignment['date']==day and assignment['shift_id']==shift['id']:
                 active_assignment=row
+    if active_assignment and not any(r['id']==active_assignment['id'] for r in result):
+        result.append(active_assignment)
     profile=store.db.face_profiles.find_one({'_id':user['_id']})
     return {'date':local.isoformat(),'server_time':store.now(),'assignments':result,'active_assignment':active_assignment,
             'face_enabled':config.FACE_ENABLED,'face_samples':len((profile or {}).get('vectors',[]))}
@@ -160,7 +167,7 @@ def export(month: str,user=Depends(current_user)):
     data=report(user,month)
     wb=Workbook(); ws=wb.active; ws.title='Bang cong'
     ws.append(['Mã NV','Họ tên','Ngày','Ca','Vào','Ra','Trạng thái','Giờ làm','Công quy đổi','Nghỉ hưởng lương (giờ)','Trễ (phút)','Sớm (phút)','Tăng ca (giờ)','Cần rà soát','Ngày lễ'])
-    labels={'present':'Đủ công','late':'Đi trễ','early':'Về sớm','absent':'Vắng','leave':'Nghỉ phép',
+    labels={'present':'Đủ công','on_time':'Đúng giờ','outside_shift':'Ngoài ca','late':'Đi trễ','early':'Về sớm','absent':'Vắng','leave':'Nghỉ phép',
             'scheduled':'Chưa đến ca','working':'Đang làm','missing_out':'Thiếu lượt ra'}
     def clock(v):
         return parse_dt(v).astimezone(config.TZ).strftime('%d/%m %H:%M') if v else ''

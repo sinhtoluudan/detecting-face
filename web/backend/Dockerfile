@@ -5,7 +5,7 @@ WORKDIR /repo/web/backend
 COPY web/backend/requirements*.txt ./
 ARG INSTALL_FACE=true
 RUN if [ "$INSTALL_FACE" = "true" ]; then pip install --no-cache-dir -r requirements-face.txt; else pip install --no-cache-dir -r requirements.txt; fi
-COPY core.py camera.py region_match.py regions.py config.json /repo/
+COPY web/core.py web/camera.py web/region_match.py web/regions.py web/config.json /repo/web/
 COPY web/backend /repo/web/backend
 COPY web/scripts /repo/web/scripts
 EXPOSE 8000

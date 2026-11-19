@@ -1,17 +1,17 @@
-"""Connect the existing FaceCam Tkinter window to the shared attendance API."""
+﻿"""Connect the existing FaceCam Tkinter window to the shared attendance API."""
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from pathlib import Path
 import json
 import os
+from pathlib import Path
 import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 import webbrowser
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import App, Image, tk, ttk
 
 
@@ -24,9 +24,13 @@ class SharedCamera(App):
         self.kiosk_status = tk.StringVar(value='Đang chờ camera…')
         super().__init__(root)
         self.root.title('FaceCam · Máy chấm công chung')
+        self.status.set('Bấm Bật camera để bắt đầu chấm công.')
 
     def build_ui(self):
         super().build_ui()
+        controls = self.rec_button.master.pack_slaves()
+        for control in controls[controls.index(self.rec_button):]:
+            control.pack_forget()
         side = self.people_list.master
         for widget in side.winfo_children():
             widget.destroy()
